@@ -19,10 +19,19 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
+def uvicorn_executable() -> str:
+    scripts = "Scripts" if sys.platform == "win32" else "bin"
+    name = "uvicorn.exe" if sys.platform == "win32" else "uvicorn"
+    path = WORKDIR / ".venv" / scripts / name
+    if path.exists():
+        return str(path)
+    return str(WORKDIR / ".venv" / "bin" / "uvicorn")
+
+
 def start_server(module: str, port: int) -> subprocess.Popen:
     return subprocess.Popen(
         [
-            str(WORKDIR / ".venv/bin/uvicorn"),
+            uvicorn_executable(),
             f"{module}:app",
             "--host",
             "127.0.0.1",
