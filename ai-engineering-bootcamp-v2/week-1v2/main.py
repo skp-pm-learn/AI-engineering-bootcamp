@@ -10,8 +10,11 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
+
+import vectorstore
 
 THIS_DIR = Path(__file__).resolve().parent
 load_dotenv(THIS_DIR / ".env")
@@ -37,10 +40,35 @@ class Answer(BaseModel):
     sources_needed: bool
 
 
+DEFAULT_CHUNK_SIZE = 800
+DEFAULT_CHUNK_OVERLAP = 100
+
+
+DEFAULT_TOP_K = 5
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1)
     model: ModelName | None = None
     force_bad: bool = False
+    top_k: int = Field(default=DEFAULT_TOP_K, gt=0, le=20)
+
+
+class IngestRequest(BaseModel):
+    # text / document_id are validated in the handler so empty input returns a
+    # clean 400 (Pydantic min_length would surface as a 422 instead).
+    text: str
+    document_id: str
+    source: str | None = None
+    metadata: dict | None = None
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
+    chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0)
+
+
+class IngestResponse(BaseModel):
+    document_id: str
+    chunks_indexed: int
+    status: str
 
 
 class AttemptResult(BaseModel):
@@ -52,18 +80,99 @@ class AttemptResult(BaseModel):
     validation_error: str | None = None
 
 
+class RetrievedChunk(BaseModel):
+    id: str
+    document_id: str | None = None
+    source: str | None = None
+    score: float | None = None
+
+
 class AskResponse(BaseModel):
     answer: Answer
     tokens_used: int
     model: str
     latency_ms: int
     cost_usd: float
+    retrieved_chunk_ids: list[str]
+    retrieved: list[RetrievedChunk]
     attempts: list[AttemptResult]
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/debug/pinecone")
+def debug_pinecone() -> dict:
+    """Confirm Pinecone is configured and reachable (no OpenAI tokens spent)."""
+    return vectorstore.check_pinecone()
+
+
+@app.get("/debug/retrieve")
+def debug_retrieve(q: str, top_k: int = 5) -> dict:
+    """Retrieval-only debug view: embed `q` and return top_k chunks + scores.
+
+    Does NOT call the LLM — use it to verify retrieval quality before wiring
+    generation into /ask. Example:
+      curl -s "http://127.0.0.1:8000/debug/retrieve?q=remote%20work%20policy"
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query 'q' must not be empty.")
+    matches = vectorstore.query(q, top_k=top_k)
+    return {"query": q, "top_k": top_k, "matches": matches}
+
+
+@app.post("/ingest")
+def ingest(body: IngestRequest) -> IngestResponse:
+    """Chunk, embed, and upsert a document into the Pinecone vector store.
+
+    curl example:
+      curl -s -X POST http://127.0.0.1:8000/ingest \
+        -H "Content-Type: application/json" \
+        -d '{
+              "document_id": "rag-intro",
+              "source": "rag_notes.md",
+              "text": "Retrieval-Augmented Generation combines a retriever with a generator. ..."
+            }'
+
+    Chunk sizing is configurable per request via chunk_size / chunk_overlap
+    (defaults 800 / 100). Empty text or document_id returns a 400.
+    """
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="Field 'text' must not be empty.")
+    if not body.document_id.strip():
+        raise HTTPException(
+            status_code=400, detail="Field 'document_id' must not be empty."
+        )
+    if body.chunk_overlap >= body.chunk_size:
+        raise HTTPException(
+            status_code=400,
+            detail="chunk_overlap must be smaller than chunk_size.",
+        )
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=body.chunk_size,
+        chunk_overlap=body.chunk_overlap,
+    )
+    chunks = splitter.split_text(body.text)
+    if not chunks:
+        raise HTTPException(
+            status_code=400, detail="Input produced no chunks to index."
+        )
+
+    base_metadata = dict(body.metadata or {})
+    if body.source:
+        base_metadata["source"] = body.source
+
+    chunks_indexed = vectorstore.upsert_chunks(
+        chunks, base_metadata, body.document_id
+    )
+    return IngestResponse(
+        document_id=body.document_id,
+        chunks_indexed=chunks_indexed,
+        status="ok",
+    )
 
 
 def get_client() -> OpenAI:
@@ -126,9 +235,60 @@ def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int,
     return raw, total_tokens, prompt_tokens, completion_tokens
 
 
+GROUNDING_INSTRUCTIONS = (
+    "You are a policy assistant for Northwind Robotics. Answer the user's "
+    "question using ONLY the context passages provided below. Each passage is "
+    "labelled with its document_id.\n"
+    "Rules:\n"
+    "1. Use only facts found in the context. Do not rely on outside knowledge.\n"
+    "2. Cite the document_id next to the facts you use, e.g. (POL-101). If you "
+    "use several passages, cite each one.\n"
+    "3. If the context does not contain enough information to answer, do not "
+    "guess. Say you cannot answer from the available Northwind policies, set "
+    "sources_needed to true, and give a low confidence.\n"
+    "4. Set confidence to reflect how fully the context supports your answer.\n"
+)
+
+
+def build_grounded_prompt(question: str, chunks: list[dict]) -> str:
+    """Build the retrieval-augmented prompt: instructions + context + question."""
+    if chunks:
+        context = "\n\n".join(
+            f"[{i + 1}] (document_id: {chunk.get('document_id')})\n{chunk.get('text')}"
+            for i, chunk in enumerate(chunks)
+        )
+    else:
+        context = "(no relevant context was retrieved)"
+
+    return (
+        f"{GROUNDING_INSTRUCTIONS}\n"
+        "=== CONTEXT ===\n"
+        f"{context}\n"
+        "=== END CONTEXT ===\n\n"
+        f"Question: {question}"
+    )
+
+
 @app.post("/ask")
 def ask(body: AskRequest) -> AskResponse:
     model = body.model or DEFAULT_MODEL
+
+    # Retrieval-augmented generation: embed the question, pull top-k chunks, and
+    # ground the prompt on them. Retrieval runs once; the generation loop below
+    # (including the force_bad validation demo) reuses the grounded prompt.
+    retrieved = vectorstore.query(body.question, top_k=body.top_k)
+    retrieved_chunks = [
+        RetrievedChunk(
+            id=chunk["id"],
+            document_id=chunk.get("document_id"),
+            source=chunk.get("source"),
+            score=chunk.get("score"),
+        )
+        for chunk in retrieved
+    ]
+    retrieved_chunk_ids = [chunk.id for chunk in retrieved_chunks]
+    grounded_prompt = build_grounded_prompt(body.question, retrieved)
+
     last_error: str | None = None
     attempts: list[AttemptResult] = []
     total_tokens_used = 0
@@ -140,7 +300,7 @@ def ask(body: AskRequest) -> AskResponse:
         try:
             if body.force_bad and attempt == 0:
                 raw, tokens_used, prompt_tokens, completion_tokens = call_malformed_json_once(
-                    body.question, model
+                    grounded_prompt, model
                 )
                 total_tokens_used += tokens_used
                 total_prompt_tokens += prompt_tokens
@@ -173,7 +333,7 @@ def ask(body: AskRequest) -> AskResponse:
                 )
             else:
                 answer, tokens_used, prompt_tokens, completion_tokens = call_structured_model(
-                    body.question, model
+                    grounded_prompt, model
                 )
                 total_tokens_used += tokens_used
                 total_prompt_tokens += prompt_tokens
@@ -197,6 +357,8 @@ def ask(body: AskRequest) -> AskResponse:
                 model=model,
                 latency_ms=latency_ms,
                 cost_usd=round(cost_usd, 6),
+                retrieved_chunk_ids=retrieved_chunk_ids,
+                retrieved=retrieved_chunks,
                 attempts=attempts,
             )
         except (ValidationError, ValueError) as exc:
