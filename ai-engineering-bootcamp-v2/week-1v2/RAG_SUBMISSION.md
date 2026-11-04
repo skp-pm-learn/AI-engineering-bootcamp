@@ -90,3 +90,35 @@ still retrieves nearby chunks, but none contain the fact, so it declines.)
 - **Out-of-scope questions** trigger a refusal instead of a hallucination.
 - Every response is transparent about *what* it retrieved
   (`retrieved_chunk_ids`), so grounding is auditable.
+
+## Golden-Set Eval
+
+Run against the live service (`https://signal-roadmap.onrender.com`, `top_k=5`).
+Retrieval hit = expected doc in top-5; faithfulness = answer supported by the
+retrieved text; correctness = matches the expected answer.
+
+| # | Question | Expected answer (short) | Expected doc | Retrieval hit? | Faithfulness? | Correctness? |
+|---|----------|-------------------------|--------------|:---:|:---:|:---:|
+| 1 | How many days per week can I work remotely? | Up to 3 days/week | POL-101 | ✅ | ✅ | ✅ |
+| 2 | What is the mileage rate for driving over 50 miles? | 45p per mile | POL-114 | ✅ | ✅ | ✅ |
+| 3 | How quickly must I report a lost laptop? | Within 1 hour | POL-207 | ✅ | ✅ | ✅ |
+| 4 | What is the WB-9 robot payload limit? | 25 kg | SPEC-WB9 | ✅ | ✅ | ✅ |
+| 5 | What is the minimum password length? | ≥ 14 characters | POL-207 | ✅ | ✅ | ✅ |
+| 6 | What is the parental leave policy? *(refusal case)* | *Not in corpus → refuse* | — | n/a | ✅ (refused) | ✅ |
+
+**Summary:** 5/5 grounded questions passed retrieval, faithfulness, and
+correctness; the out-of-corpus question correctly refused
+(`sources_needed: true`, confidence 0.1). Every grounded answer cited its
+source `document_id` and returned confidence 1.0.
+
+Actual answers returned (live):
+
+1. "Employees may work remotely up to three days per week (POL-101)."
+2. "The mileage rate for driving over 50 miles is 45 pence per mile (POL-114)."
+3. "You must report a lost laptop within one hour to the security desk (POL-207)."
+4. "The WB-9 robot has a payload capacity limit of 25 kg (SPEC-WB9)."
+5. "The minimum password length must be at least 14 characters (POL-207)."
+6. "I cannot answer from the available Northwind policies." *(refused)*
+
+> Scoring here was judged against the known corpus facts (golden set), not an
+> automated grader.
