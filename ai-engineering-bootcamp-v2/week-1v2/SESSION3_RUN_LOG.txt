@@ -1,0 +1,9 @@
+======================================================================
+USER: How much does Northwind reimburse for home office equipment, and how often?
+----------------------------------------------------------------------
+  [ACT]     call search_policies({'query': 'home office equipment reimbursement amount frequency'})
+  [OBSERVE] search_policies -> status=ok
+  [ANSWER]  Northwind reimburses up to **£350** (or local equivalent) **once every 36 months** for approved home office equipment (POL-101). Claims are processed through the expenses policy (POL-101, POL-114).
+----------------------------------------------------------------------
+FINAL: Northwind reimburses up to **£350** (or local equivalent) **once every 36 months** for approved home office equipment (POL-101). Claims are processed through the expenses policy (POL-101, POL-114).
+
