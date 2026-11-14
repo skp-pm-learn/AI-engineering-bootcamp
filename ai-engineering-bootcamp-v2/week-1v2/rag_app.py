@@ -48,7 +48,7 @@ if st.sidebar.button("Check API health"):
     else:
         st.sidebar.error(f"Unreachable (HTTP {status}): {data}")
 
-ingest_tab, ask_tab = st.tabs(["Ingest", "Ask"])
+ingest_tab, ask_tab, agent_tab = st.tabs(["Ingest", "Ask", "Agent"])
 
 # --- Ingest -----------------------------------------------------------------
 with ingest_tab:
@@ -157,6 +157,55 @@ with ask_tab:
                 cols[1].metric("Tokens", str(data.get("tokens_used", "-")))
                 cols[2].metric("Latency", f"{data.get('latency_ms', '-')} ms")
                 cols[3].metric("Cost", f"${data.get('cost_usd', '-')}")
+
+                with st.expander("Raw JSON"):
+                    st.json(data)
+
+# --- Agent ------------------------------------------------------------------
+with agent_tab:
+    st.subheader("Ask the ADK agent")
+    st.caption(
+        "Calls POST /agent. The Gemini agent decides when to use its "
+        "search_policies tool, then answers with citations. Needs GOOGLE_API_KEY "
+        "set on the API server."
+    )
+    with st.form("agent_form"):
+        goal = st.text_area(
+            "Goal / message",
+            "How much does Northwind reimburse for home office equipment, and how often?",
+            height=90,
+        )
+        agent_submitted = st.form_submit_button("Run agent", type="primary")
+
+    if agent_submitted:
+        if not goal.strip():
+            st.error("A goal / message is required.")
+        else:
+            with st.spinner("Calling /agent..."):
+                status, data = call_json("POST", f"{base_url}/agent", {"message": goal})
+
+            if status != 200 or not isinstance(data, dict) or "answer" not in data:
+                st.error(f"HTTP {status}")
+                st.json(data)
+            else:
+                if data.get("stopped"):
+                    st.warning("⚠️ Stopped — the agent hit its step limit.")
+                else:
+                    st.success("✅ Agent completed")
+
+                st.markdown("### Answer")
+                st.write(data.get("answer", ""))
+
+                steps = data.get("steps", [])
+                st.markdown(f"### Steps ({len(steps)})")
+                if not steps:
+                    st.caption("The agent answered without calling any tool.")
+                for i, step in enumerate(steps, start=1):
+                    st.markdown(f"**{i}. Act → `{step.get('tool')}`**")
+                    obs = step.get("observation")
+                    if obs:
+                        st.markdown("Observe:")
+                        st.code(obs, language="json")
 
                 with st.expander("Raw JSON"):
                     st.json(data)

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError
 
 import vectorstore
 
@@ -98,9 +98,63 @@ class AskResponse(BaseModel):
     attempts: list[AttemptResult]
 
 
+class AgentStep(BaseModel):
+    tool: str
+    observation: str | None = None
+
+
+class AgentRequest(BaseModel):
+    # The user's goal/question. Either "message" or "goal" is accepted in the body.
+    message: str = Field(
+        min_length=1, validation_alias=AliasChoices("message", "goal")
+    )
+
+
+class AgentResponse(BaseModel):
+    answer: str
+    steps: list[AgentStep]
+    stopped: bool = False
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/agent")
+async def run_agent_endpoint(body: AgentRequest) -> AgentResponse:
+    """Invoke the Google ADK agent on a user goal.
+
+    Returns the final grounded answer plus a short steps[] trace (tool name +
+    truncated observation per call). Never returns API keys or environment data.
+
+    curl example (local):
+      curl -s -X POST http://127.0.0.1:8000/agent \
+        -H "Content-Type: application/json" \
+        -d '{"message": "How much does Northwind reimburse for home office equipment, and how often?"}'
+
+    curl example (Render):
+      curl -s -X POST https://signal-roadmap.onrender.com/agent \
+        -H "Content-Type: application/json" \
+        -d '{"message": "What is the remote work policy?"}'
+    """
+    # Imported lazily so the Session 1 /ask path never depends on google-adk.
+    import agent as adk_agent
+
+    try:
+        result = await adk_agent.run_agent(body.message)
+    except Exception as exc:  # noqa: BLE001
+        # Surface a clean error without leaking internals/keys.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Agent run failed: {type(exc).__name__}",
+        ) from exc
+
+    return AgentResponse(
+        answer=result["final"],
+        steps=[AgentStep(**step) for step in result["steps"]],
+        stopped=result.get("stopped", False),
+    )
 
 
 @app.get("/debug/pinecone")
