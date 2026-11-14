@@ -1,0 +1,48 @@
+TARGET MARKET: team collaboration software
+============================================================
+
+--- competitor_agent ---
+ACT:   query_competitor_db({'market': 'team collaboration software'})
+OBS:   {"market": "team collaboration software", "competitors": [{"name": "Acme Collab", "positioning": "enterprise", "price": 
+ACT:   web_research({'query': 'team collaboration software competitors news 2024 2025'})
+OBS:   {"query": "team collaboration software competitors news 2024 2025", "findings": [{"source": "techcrunch.com", "date": "2
+
+--- evidence_agent ---
+ACT:   retrieve_documents({'query': 'differentiation team collaboration software'})
+OBS:   {"query": "differentiation team collaboration software", "passages": [{"doc": "Gartner Collab MQ 2026", "page": 12, "tex
+ACT:   retrieve_documents({'query': 'team collaboration differentiation enterprise administrative control compliance mobile experience Flowly'})
+OBS:   {"query": "team collaboration differentiation enterprise administrative control compliance mobile experience Flowly", "p
+
+--- whitespace_agent ---
+ACT:   analyze_customer_feedback({'segment': 'team collaboration software'})
+OBS:   {"segment": "team collaboration software", "unmet_needs": [{"need": "offline mode for field teams", "mentions": 128, "se
+
+--- synthesis_agent ---
+
+============================================================
+FINAL REPORT:
+
+### COMPETITIVE LANDSCAPE
+
+1. **Acme Collab**
+   * **Positioning & Price:** Enterprise ($18 / user / month)
+   * **Differentiation:** Built for security and governance with native SSO, SOC2 compliance, granular admin controls, and a newly launched on-prem tier for regulated industries. Administrative control and compliance are noted by enterprise buyers as the primary differentiator in the market [Gartner Collab MQ 2026, p. 12].
+
+2. **Flowly**
+   * **Positioning & Price:** SMB / Prosumer ($8 / user / month)
+   * **Differentiation:** Focused on user experience with rapid onboarding, a polished mobile app, AI-powered meeting notes (via a $40M Series B expansion), and is the only vendor in the market scoring above 4 out of 5 in mobile usability [Forrester Wave Q3-2026, p. 7].
+
+3. **Tasklytic**
+   * **Positioning & Price:** Developer-First ($12 / user / month)
+   * **Differentiation:** Built for technical teams, standing out with deep GitHub and Jira integrations and a robust automation API tailored for engineering and product workflows.
+
+---
+
+### RANKED WHITESPACE OPPORTUNITIES
+
+1. **Offline mode for field teams** *(128 mentions — Frustrated)*
+   * **Rationale:** High frequency of sync issues for users in remote locations, manufacturing plants, or transit, while none of the current competitors offer an offline-first architecture to protect field productivity.
+2. **Usage-based pricing instead of per-seat** *(94 mentions — High churn-risk)*
+   * **Rationale:** Customers are actively looking to leave due to rigid per-seat cost structures ($8 to $18/user/month) that penalize business growth and infrequent users, leaving all major players exposed to cost-driven churn.
+3. **Built-in client/guest access without extra seats** *(61 mentions — Requested)*
+   * **Rationale:** External collaboration is blocked or heavily overcharged by standard licensing models across Acme, Flowly, and Tasklytic, creating friction for teams collaborating with external stakeholders.
