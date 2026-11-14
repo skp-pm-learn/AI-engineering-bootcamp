@@ -121,6 +121,62 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+class StratgLensAct(BaseModel):
+    tool: str
+    args: dict = Field(default_factory=dict)
+    observation: str | None = None
+
+
+class StratgLensTurn(BaseModel):
+    agent: str
+    think: str = ""
+    acts: list[StratgLensAct] = Field(default_factory=list)
+    output: str = ""
+
+
+class StratgLensRequest(BaseModel):
+    message: str = Field(
+        min_length=1, validation_alias=AliasChoices("message", "goal", "market")
+    )
+
+
+class StratgLensResponse(BaseModel):
+    answer: str
+    turns: list[StratgLensTurn]
+
+
+@app.post("/stratglens")
+async def run_stratglens_endpoint(body: StratgLensRequest) -> StratgLensResponse:
+    """Run the StratgLens multi-agent pipeline for a target market / question.
+
+    Returns the final report (competitive landscape + ranked whitespace) plus a
+    per-agent Think -> Act -> Observe decision loop. No API keys or env in the body.
+
+    curl example (local):
+      curl -s -X POST http://127.0.0.1:8000/stratglens \
+        -H "Content-Type: application/json" \
+        -d '{"message": "team collaboration software"}'
+
+    curl example (Render):
+      curl -s -X POST https://signal-roadmap.onrender.com/stratglens \
+        -H "Content-Type: application/json" \
+        -d '{"message": "project management tools for agencies"}'
+    """
+    import stratglens  # lazy import; /ask never depends on google-adk
+
+    try:
+        result = await stratglens.run_stratglens(body.message)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"StratgLens run failed: {type(exc).__name__}"
+        ) from exc
+
+    return StratgLensResponse(
+        answer=result["final"],
+        turns=[StratgLensTurn(**turn) for turn in result["turns"]],
+    )
+
+
 @app.post("/agent")
 async def run_agent_endpoint(body: AgentRequest) -> AgentResponse:
     """Invoke the Google ADK agent on a user goal.
