@@ -23,6 +23,7 @@ Run:
 """
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -185,6 +186,74 @@ async def ask(agent, message: str, max_retries: int = 3) -> str:
                 wait = 2 ** attempt
                 print(f"  [RETRY]   model overloaded (503); retry {attempt}/{max_retries - 1} in {wait}s")
                 await asyncio.sleep(wait)
+                continue
+            raise
+
+
+# =====================================================================
+# Structured run (for the FastAPI POST /agent endpoint)
+# =====================================================================
+
+def _truncate_observation(resp, limit: int = 300) -> str:
+    """Render a tool result as a short, safe string (truncated, no secrets)."""
+    try:
+        text = json.dumps(resp, default=str, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        text = str(resp)
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+async def _collect_once(agent, message: str) -> dict:
+    """Run the agent once, returning {final, steps[]} instead of printing.
+
+    steps[] pairs each tool call with a truncated view of what it observed.
+    """
+    service = InMemorySessionService()
+    runner = Runner(agent=agent, app_name="stratglens", session_service=service)
+    session = await service.create_session(app_name="stratglens", user_id="user1")
+    content = types.Content(role="user", parts=[types.Part(text=message)])
+
+    steps: list[dict] = []
+    tool_calls = 0
+    final = "(no response)"
+
+    async for event in runner.run_async(
+        user_id="user1", session_id=session.id, new_message=content
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if getattr(part, "function_call", None):
+                    tool_calls += 1
+                    steps.append({"tool": part.function_call.name, "observation": None})
+                elif getattr(part, "function_response", None):
+                    fr = part.function_response
+                    obs = _truncate_observation(fr.response)
+                    # Attach to the most recent matching call still awaiting a result.
+                    for step in reversed(steps):
+                        if step["tool"] == fr.name and step["observation"] is None:
+                            step["observation"] = obs
+                            break
+                    else:
+                        steps.append({"tool": fr.name, "observation": obs})
+
+        if tool_calls > MAX_TOOL_CALLS:
+            return {"final": "Stopped: exceeded the maximum number of retrieval steps.",
+                    "steps": steps, "stopped": True}
+
+        if event.is_final_response() and event.content and event.content.parts:
+            final = event.content.parts[0].text or final
+
+    return {"final": final, "steps": steps, "stopped": False}
+
+
+async def run_agent(message: str, max_retries: int = 3) -> dict:
+    """Programmatic entry point: structured {final, steps[]} with 503 retry/backoff."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await _collect_once(root_agent, message)
+        except ServerError as exc:
+            if exc.code == 503 and attempt < max_retries:
+                await asyncio.sleep(2 ** attempt)
                 continue
             raise
 
